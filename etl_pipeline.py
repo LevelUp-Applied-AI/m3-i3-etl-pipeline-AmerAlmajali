@@ -279,3 +279,181 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# """ETL Pipeline — Amman Digital Market Customer Analytics"""
+
+# from sqlalchemy import create_engine
+# import pandas as pd
+# import os
+
+
+# # =========================
+# # EXTRACT
+# # =========================
+# def extract(engine):
+#     tables = ["customers", "products", "orders", "order_items"]
+#     data = {}
+
+#     for table in tables:
+#         df = pd.read_sql(f"SELECT * FROM {table}", engine)
+#         print(f"[EXTRACT] {table}: {len(df)} rows")
+#         data[table] = df
+
+#     return data
+
+
+# =========================
+# TRANSFORM
+# =========================
+# def transform(data_dict):
+
+#     customers = data_dict["customers"]
+#     products = data_dict["products"]
+#     orders = data_dict["orders"]
+#     order_items = data_dict["order_items"]
+
+#     # Join all tables
+#     df = (
+#         order_items.merge(orders, on="order_id", how="inner")
+#         .merge(products, on="product_id", how="inner")
+#         .merge(customers, on="customer_id", how="left")
+#     )
+
+#     print(f"[TRANSFORM] After joins: {len(df)} rows")
+
+#     # -----------------------
+#     # Cleaning
+#     # -----------------------
+#     before = len(df)
+
+#     df = df[df["status"] != "cancelled"]
+#     df = df[df["quantity"] <= 100]
+
+#     print(f"[TRANSFORM] Removed {before - len(df)} invalid rows")
+
+#     # -----------------------
+#     # Feature Engineering
+#     # -----------------------
+#     df["line_total"] = df["quantity"] * df["unit_price"]
+
+#     # -----------------------
+#     # Aggregation
+#     # -----------------------
+#     summary = (
+#         df.groupby("customer_id")
+#         .agg(total_orders=("order_id", "nunique"), total_revenue=("line_total", "sum"))
+#         .reset_index()
+#     )
+
+#     summary["avg_order_value"] = summary["total_revenue"] / summary["total_orders"]
+
+#     # Add customer_name + city (FIXED HERE)
+#     summary = summary.merge(
+#         customers[["customer_id", "customer_name", "city"]],
+#         on="customer_id",
+#         how="left",
+#     )
+
+#     # -----------------------
+#     # Top category
+#     # -----------------------
+#     category_revenue = (
+#         df.groupby(["customer_id", "category"])["line_total"].sum().reset_index()
+#     )
+
+#     top_category = (
+#         category_revenue.sort_values(
+#             ["customer_id", "line_total"], ascending=[True, False]
+#         )
+#         .drop_duplicates("customer_id")
+#         .rename(columns={"category": "top_category"})
+#     )
+
+#     summary = summary.merge(
+#         top_category[["customer_id", "top_category"]], on="customer_id", how="left"
+#     )
+
+#     print(f"[TRANSFORM] Final rows: {len(summary)}")
+
+#     return summary
+
+
+# # =========================
+# # VALIDATE
+# # =========================
+# def validate(df):
+
+#     checks = {
+#         "no_null_customer_id": df["customer_id"].notna().all(),
+#         "no_null_customer_name": df["customer_name"].notna().all(),
+#         "positive_revenue": (df["total_revenue"] > 0).all(),
+#         "no_duplicate_customer_id": df["customer_id"].is_unique,
+#         "positive_total_orders": (df["total_orders"] > 0).all(),
+#     }
+
+#     print("[VALIDATE] Running checks...")
+
+#     for name, result in checks.items():
+#         print(f"[{'PASS' if result else 'FAIL'}] {name}")
+
+#     if not all(checks.values()):
+#         raise ValueError("Data validation failed!")
+
+#     print("[VALIDATE] All checks passed ✅")
+#     return checks
+
+
+# # =========================
+# # LOAD
+# # =========================
+# def load(df, engine, csv_path):
+
+#     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+
+#     df.to_sql("customer_analytics", engine, if_exists="replace", index=False)
+
+#     df.to_csv(csv_path, index=False)
+
+#     print(f"[LOAD] Loaded {len(df)} rows")
+#     print(f"[LOAD] CSV saved to: {csv_path}")
+
+
+# # =========================
+# # MAIN
+# # =========================
+# def main():
+
+#     engine = create_engine(
+#         "postgresql+psycopg://postgres:postgres@localhost:5432/amman_market"
+#     )
+
+#     print("🚀 Starting ETL pipeline...\n")
+
+#     # Extract
+#     print("Step 1: Extract")
+#     data = extract(engine)
+#     print()
+
+#     # Transform
+#     print("Step 2: Transform")
+#     summary = transform(data)
+#     print()
+
+#     # Validate
+#     print("Step 3: Validate")
+#     validate(summary)
+#     print()
+
+#     # Load
+#     print("Step 4: Load")
+#     load(summary, engine, "output/customer_analytics.csv")
+#     print()
+
+#     print("✅ ETL pipeline completed successfully.")
+
+
+# # =========================
+# # ENTRY POINT
+# # =========================
+# if __name__ == "__main__":
+#     main()
