@@ -3,9 +3,52 @@
 Extracts data from PostgreSQL, transforms it into customer-level summaries,
 validates data quality, and loads results to a database table and CSV file.
 """
+
 from sqlalchemy import create_engine
 import pandas as pd
 import os
+import json
+import logging
+from datetime import datetime
+
+
+# =========================
+# Logging (Tier 3)
+# =========================
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+
+# =========================
+# Metadata helpers (Tier 2)
+# =========================
+def get_last_run_time(engine):
+    """Get last successful ETL run timestamp."""
+    try:
+        df = pd.read_sql(
+            "SELECT MAX(end_time) AS last_run FROM etl_metadata WHERE status='success'",
+            engine,
+        )
+        return df.iloc[0]["last_run"]
+    except:
+        return None
+
+
+def log_etl_run(engine, start, end, rows, status):
+    """Log ETL run metadata."""
+    df = pd.DataFrame(
+        [
+            {
+                "start_time": start,
+                "end_time": end,
+                "rows_processed": rows,
+                "status": status,
+            }
+        ]
+    )
+    df.to_sql("etl_metadata", engine, if_exists="append", index=False)
 
 
 def extract(engine):
@@ -17,8 +60,29 @@ def extract(engine):
     Returns:
         dict: {"customers": df, "products": df, "orders": df, "order_items": df}
     """
-    # TODO: Implement extraction
-    pass
+
+    # Incremental logic (Tier 2)
+    last_run = get_last_run_time(engine)
+
+    if last_run is None:
+        orders = pd.read_sql("SELECT * FROM orders", engine)
+    else:
+        orders = pd.read_sql(
+            f"SELECT * FROM orders WHERE order_date > '{last_run}'", engine
+        )
+
+    customers = pd.read_sql("SELECT * FROM customers", engine)
+    products = pd.read_sql("SELECT * FROM products", engine)
+    order_items = pd.read_sql("SELECT * FROM order_items", engine)
+
+    logger.info("Data extracted")
+
+    return {
+        "customers": customers,
+        "products": products,
+        "orders": orders,
+        "order_items": order_items,
+    }
 
 
 def transform(data_dict):
@@ -40,8 +104,64 @@ def transform(data_dict):
             customer_id, customer_name, city, total_orders,
             total_revenue, avg_order_value, top_category
     """
-    # TODO: Implement transformation
-    pass
+
+    customers = data_dict["customers"]
+    products = data_dict["products"]
+    orders = data_dict["orders"]
+    order_items = data_dict["order_items"]
+
+    # Join tables
+    df = (
+        order_items.merge(orders, on="order_id")
+        .merge(products, on="product_id")
+        .merge(customers, on="customer_id")
+    )
+
+    # Filters
+    df = df.query("status != 'cancelled'")
+    df = df.query("quantity <= 100")
+
+    # Feature Engineering
+    df["line_total"] = df["quantity"] * df["unit_price"]
+
+    # Aggregation
+    summary = (
+        df.groupby("customer_id")
+        .agg(total_orders=("order_id", "nunique"), total_revenue=("line_total", "sum"))
+        .reset_index()
+    )
+
+    summary["avg_order_value"] = summary["total_revenue"] / summary["total_orders"]
+
+    summary = summary.merge(
+        customers[["customer_id", "customer_name", "city"]], on="customer_id"
+    )
+
+    # Top category
+    category_revenue = (
+        df.groupby(["customer_id", "category"])["line_total"].sum().reset_index()
+    )
+
+    top_category = (
+        category_revenue.sort_values(
+            ["customer_id", "line_total"], ascending=[True, False]
+        )
+        .drop_duplicates("customer_id")
+        .rename(columns={"category": "top_category"})
+    )
+
+    summary = summary.merge(top_category, on="customer_id")
+
+    # =========================
+    # Outlier Detection (Tier 1)
+    # =========================
+    mean = summary["total_revenue"].mean()
+    std = summary["total_revenue"].std()
+    threshold = mean + 3 * std
+
+    summary["is_outlier"] = summary["total_revenue"] > threshold
+
+    return summary
 
 
 def validate(df):
@@ -62,8 +182,22 @@ def validate(df):
     Raises:
         ValueError: if any critical check fails
     """
-    # TODO: Implement validation
-    pass
+
+    checks = {
+        "no_null_customer_id": bool(df["customer_id"].notna().all()),
+        "no_null_customer_name": bool(df["customer_name"].notna().all()),
+        "positive_revenue": bool((df["total_revenue"] > 0).all()),
+        "no_duplicate_customer_id": bool(df["customer_id"].is_unique),
+        "positive_total_orders": bool((df["total_orders"] > 0).all()),
+    }
+
+    for name, result in checks.items():
+        logger.info(f"{name}: {'PASS' if result else 'FAIL'}")
+
+    if not all(checks.values()):
+        raise ValueError("Data validation failed")
+
+    return checks
 
 
 def load(df, engine, csv_path):
@@ -74,19 +208,73 @@ def load(df, engine, csv_path):
         engine: SQLAlchemy engine
         csv_path: path for CSV output
     """
-    # TODO: Implement loading
-    pass
+
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+
+    df.to_sql("customer_analytics", engine, if_exists="replace", index=False)
+    df.to_csv(csv_path, index=False)
+
+    logger.info(f"Loaded {len(df)} rows")
+
+
+# =========================
+# Quality Report (Tier 1)
+# =========================
+def generate_quality_report(df, checks):
+    """Generate JSON data quality report."""
+
+    outliers = df[df["is_outlier"]][["customer_id", "total_revenue"]]
+
+    report = {
+        "timestamp": datetime.now().isoformat(),
+        "total_records": len(df),
+        "checks": checks,
+        "outliers": outliers.to_dict(orient="records"),
+    }
+
+    os.makedirs("output", exist_ok=True)
+
+    with open("output/quality_report.json", "w") as f:
+        json.dump(report, f, indent=4)
+
+    logger.info("Quality report generated")
 
 
 def main():
     """Orchestrate the ETL pipeline: extract -> transform -> validate -> load."""
-    # TODO: Implement main orchestration
-    # 1. Create engine from DATABASE_URL env var (or default)
-    # 2. Extract
-    # 3. Transform
-    # 4. Validate
-    # 5. Load to customer_summary table and output/customer_analytics.csv
-    pass
+
+    engine = create_engine(
+        "postgresql+psycopg://postgres:postgres@localhost:5432/amman_market"
+    )
+
+    start_time = datetime.now()
+
+    try:
+        # Extract
+        data = extract(engine)
+
+        # Transform
+        summary = transform(data)
+
+        # Validate
+        checks = validate(summary)
+
+        # Generate report (Tier 1)
+        generate_quality_report(summary, checks)
+
+        # Load
+        load(summary, engine, "output/customer_analytics.csv")
+
+        end_time = datetime.now()
+
+        # Log metadata (Tier 2)
+        log_etl_run(engine, start_time, end_time, len(summary), "success")
+
+        logger.info("ETL completed successfully")
+
+    except Exception as e:
+        log_etl_run(engine, start_time, datetime.now(), 0, "failed")
+        logger.error(f"ETL failed: {e}")
 
 
 if __name__ == "__main__":
