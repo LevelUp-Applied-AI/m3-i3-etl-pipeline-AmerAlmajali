@@ -1,0 +1,39 @@
+{
+    "db_url": "postgresql+psycopg://postgres:postgres@localhost:5432/amman_market",
+    "tables": [
+        "products",
+        "order_items"
+    ],
+    "base_table": "order_items",
+    "joins": [
+        {
+            "table": "products",
+            "key": "product_id"
+        }
+    ],
+    "filters": [
+        "quantity <= 100"
+    ],
+    "calculated_fields": {
+        "line_total": "quantity * unit_price"
+    },
+    "group_by": [
+        "product_id"
+    ],
+    "aggregations": {
+        "quantity": "sum",
+        "line_total": "sum"
+    },
+    "rename": {
+        "quantity": "total_units_sold",
+        "line_total": "total_revenue"
+    },
+    "validations": [
+        {
+            "name": "positive_units",
+            "condition": "(df['total_units_sold'] >= 0).all()"
+        }
+    ],
+    "output_table": "product_analytics",
+    "output_csv": "output/product_analytics.csv"
+}

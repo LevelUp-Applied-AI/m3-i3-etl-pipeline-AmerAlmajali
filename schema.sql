@@ -29,3 +29,10 @@ CREATE TABLE order_items (
     product_id INTEGER NOT NULL REFERENCES products(product_id),
     quantity   INTEGER NOT NULL CHECK (quantity > 0)
 );
+CREATE TABLE etl_metadata (
+    run_id SERIAL PRIMARY KEY,
+    start_time TIMESTAMP,
+    end_time TIMESTAMP,
+    rows_processed INT,
+    status VARCHAR(20)
+);
