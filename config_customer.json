@@ -1,0 +1,54 @@
+{
+    "db_url": "postgresql+psycopg://postgres:postgres@localhost:5432/amman_market",
+    "tables": [
+        "customers",
+        "orders",
+        "order_items",
+        "products"
+    ],
+    "base_table": "order_items",
+    "joins": [
+        {
+            "table": "orders",
+            "key": "order_id"
+        },
+        {
+            "table": "products",
+            "key": "product_id"
+        },
+        {
+            "table": "customers",
+            "key": "customer_id"
+        }
+    ],
+    "filters": [
+        "status != 'cancelled'",
+        "quantity <= 100"
+    ],
+    "calculated_fields": {
+        "line_total": "quantity * unit_price"
+    },
+    "group_by": [
+        "customer_id"
+    ],
+    "aggregations": {
+        "order_id": "nunique",
+        "line_total": "sum"
+    },
+    "rename": {
+        "order_id": "total_orders",
+        "line_total": "total_revenue"
+    },
+    "validations": [
+        {
+            "name": "no_null_customer_id",
+            "condition": "df['customer_id'].notna().all()"
+        },
+        {
+            "name": "positive_revenue",
+            "condition": "(df['total_revenue'] > 0).all()"
+        }
+    ],
+    "output_table": "customer_analytics",
+    "output_csv": "output/customer_analytics.csv"
+}
